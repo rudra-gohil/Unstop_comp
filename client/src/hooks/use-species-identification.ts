@@ -20,12 +20,9 @@ export function useSpeciesIdentification() {
   const queryClient = useQueryClient();
 
   const identifySpecies = useMutation({
-    mutationFn: async ({ image, regionCode }: { image: File; regionCode?: string }) => {
+    mutationFn: async ({ image }: { image: File }) => {
       const formData = new FormData();
       formData.append('image', image);
-      if (regionCode) {
-        formData.append('regionCode', regionCode);
-      }
 
       const response = await fetch('/api/identify', {
         method: 'POST',

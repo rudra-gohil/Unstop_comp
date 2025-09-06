@@ -1,10 +1,9 @@
 import { useState, useRef } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { useSpeciesIdentification } from "@/hooks/use-species-identification";
-import { Camera, Upload, Microscope, MapPin, Loader2 } from "lucide-react";
+import { Camera, Upload, Microscope, Loader2, Leaf, Bug } from "lucide-react";
 
 interface ImageUploadProps {
   onAnalysisComplete: (result: any) => void;
@@ -12,7 +11,6 @@ interface ImageUploadProps {
 
 export default function ImageUpload({ onAnalysisComplete }: ImageUploadProps) {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [regionCode, setRegionCode] = useState<string>("");
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
@@ -69,7 +67,6 @@ export default function ImageUpload({ onAnalysisComplete }: ImageUploadProps) {
     try {
       const result = await identifySpecies.mutateAsync({
         image: selectedFile,
-        regionCode: regionCode || undefined,
       });
       
       onAnalysisComplete(result);
@@ -140,34 +137,29 @@ export default function ImageUpload({ onAnalysisComplete }: ImageUploadProps) {
           data-testid="input-file"
         />
 
-        {/* Region Selection */}
-        <div className="mt-6">
-          <label className="block text-sm font-medium mb-2 flex items-center">
-            <MapPin className="text-forest mr-2 h-4 w-4" />
-            Geographic Region (Optional)
-          </label>
-          <Select value={regionCode} onValueChange={setRegionCode} data-testid="select-region">
-            <SelectTrigger className="bg-secondary border-border focus:border-saffron">
-              <SelectValue placeholder="All Regions" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="">All Regions</SelectItem>
-              <SelectItem value="BC_CA">British Columbia, Canada</SelectItem>
-              <SelectItem value="US_NE">US Northeast</SelectItem>
-              <SelectItem value="US_SE">US Southeast</SelectItem>
-              <SelectItem value="IN_N">North India</SelectItem>
-              <SelectItem value="IN_S">South India</SelectItem>
-              <SelectItem value="IN_E">East India</SelectItem>
-              <SelectItem value="IN_W">West India</SelectItem>
-            </SelectContent>
-          </Select>
+        {/* Indian Biodiversity Info */}
+        <div className="mt-6 p-4 bg-gradient-to-r from-saffron/10 to-forest/10 rounded-lg border border-saffron/20">
+          <div className="flex items-center space-x-4">
+            <div className="flex space-x-2">
+              <div className="w-8 h-8 bg-saffron/20 rounded-full flex items-center justify-center">
+                <Leaf className="h-4 w-4 text-saffron" />
+              </div>
+              <div className="w-8 h-8 bg-forest/20 rounded-full flex items-center justify-center">
+                <Bug className="h-4 w-4 text-forest" />
+              </div>
+            </div>
+            <div>
+              <h4 className="font-medium text-foreground">🇮🇳 Indian Biodiversity Focus</h4>
+              <p className="text-sm text-muted-foreground">Specialized for invasive species threatening Indian ecosystems</p>
+            </div>
+          </div>
         </div>
 
         {/* Analyze Button */}
         <Button
           onClick={handleAnalyze}
           disabled={!selectedFile || isLoading}
-          className="w-full mt-6 bg-gradient-to-r from-saffron to-gold text-background font-semibold hover:shadow-lg hover:shadow-saffron/25 transform hover:scale-105 transition-all"
+          className="w-full mt-6 bg-gradient-to-r from-saffron to-gold text-background font-semibold hover:shadow-lg hover:shadow-saffron/25 transform hover:scale-105 transition-all duration-300 animate-pulse-glow"
           data-testid="button-analyze"
         >
           {isLoading ? (

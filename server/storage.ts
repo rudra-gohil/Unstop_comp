@@ -83,6 +83,8 @@ export class MemStorage implements IStorage {
     const speciesReport: SpeciesReport = {
       ...report,
       id,
+      notes: report.notes || null,
+      reportedBy: report.reportedBy || null,
       createdAt: new Date(),
     };
     this.speciesReports.set(id, speciesReport);
@@ -104,12 +106,8 @@ export class MemStorage implements IStorage {
   }> {
     return {
       totalIdentifications: this.speciesIdentifications.size,
-      activeThreats: 196, // Based on Julia code constant
-      regionsCovered: new Set(
-        Array.from(this.speciesIdentifications.values())
-          .map(id => id.regionCode)
-          .filter(Boolean)
-      ).size,
+      activeThreats: 196, // Based on 196 species in Indian dataset
+      regionsCovered: 1, // India-focused, single region
       conservationProgress: Math.min(73, (this.speciesIdentifications.size / 100) * 100),
     };
   }

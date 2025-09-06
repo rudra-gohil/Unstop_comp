@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import multer from "multer";
 import { storage } from "./storage";
 import { insertSpeciesIdentificationSchema, insertSpeciesReportSchema } from "@shared/schema";
-import { INVASIVE_SPECIES_DATA } from "../client/src/lib/species-data";
+import { FULL_SPECIES_DATA } from "../client/src/lib/species-data";
 
 // Configure multer for image uploads
 const upload = multer({
@@ -15,7 +15,7 @@ const upload = multer({
     if (file.mimetype.startsWith('image/')) {
       cb(null, true);
     } else {
-      cb(new Error('Only image files are allowed'), false);
+      cb(new Error('Only image files are allowed') as any, false);
     }
   },
 });
@@ -29,17 +29,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "No image file provided" });
       }
 
-      const { regionCode } = req.body;
-      
       // TODO: Integrate with actual Julia model
       // For now, simulate the Julia API response structure
-      const mockPredictions = simulateJuliaIdentification(regionCode);
+      const mockPredictions = simulateJuliaIdentification();
       
       // Store the identification result
       const identification = await storage.createSpeciesIdentification({
         imageUrl: `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`,
         predictions: mockPredictions,
-        regionCode: regionCode || null,
         userId: null, // No auth for now
       });
 
@@ -115,11 +112,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   return httpServer;
 }
 
-// Simulate Julia model predictions based on the provided code
-function simulateJuliaIdentification(regionCode?: string) {
-  const availableSpecies = regionCode && INVASIVE_SPECIES_DATA.regionTags[regionCode] 
-    ? INVASIVE_SPECIES_DATA.species.filter(s => INVASIVE_SPECIES_DATA.regionTags[regionCode]?.has(s.name))
-    : INVASIVE_SPECIES_DATA.species;
+// Simulate Julia model predictions for Indian invasive species
+function simulateJuliaIdentification() {
+  const availableSpecies = FULL_SPECIES_DATA.species;
 
   // Generate top 3 predictions with confidence scores
   const shuffled = [...availableSpecies].sort(() => Math.random() - 0.5);

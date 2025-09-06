@@ -20,7 +20,6 @@ export const speciesIdentifications = pgTable("species_identifications", {
     impactLevel: "low" | "medium" | "high";
     nativeTo: string;
   }[]>().notNull(),
-  regionCode: text("region_code"),
   userId: varchar("user_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -42,7 +41,6 @@ export const insertUserSchema = createInsertSchema(users).pick({
 export const insertSpeciesIdentificationSchema = createInsertSchema(speciesIdentifications).pick({
   imageUrl: true,
   predictions: true,
-  regionCode: true,
   userId: true,
 });
 
