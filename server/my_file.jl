@@ -1,0 +1,224 @@
+# using Pkg
+# Pkg.add.(["Flux","Images","BSON","Random","Statistics","HTTP","JSON3","Logging","Dates"])
+
+using Flux
+using Images
+using BSON
+using Random, Statistics
+using HTTP
+using JSON3
+using Logging
+using Dates
+using FileIO
+
+# =============================================================================
+# LABELS: Invasive Plants and Insects (replace with Indian species if needed)
+# =============================================================================
+# Point to your dataset: server/datasets/Species196
+const DATA_DIR = get(ENV, "DATA_DIR", joinpath(@__DIR__, "..", "datasets", "Species196"))
+
+# Collect class names from subfolders (e.g., Acleris, Apate, Arhopalus, …)
+const ALL_SPECIES = let
+    class_dirs = filter(isdir, readdir(DATA_DIR; join=true))  # full paths to subfolders
+    sort!(basename.(class_dirs))                              # folder names become labels
+end
+
+const NUM_CLASSES = length(ALL_SPECIES)
+
+# Region filters (example: everything allowed in a single India-wide tag)
+const REGION_TAGS = Dict{String, Set{String}}(
+    "IN_ALL" => Set(ALL_SPECIES),
+)
+
+
+# =============================================================================
+# MODEL HELPERS
+# =============================================================================
+function conv_block(in_ch::Int, out_ch::Int; ks::Int=3, stride::Int=1)
+    pad = div(ks, 2)
+    Chain(
+        Conv((ks, ks), in_ch => out_ch, stride=stride, pad=pad),
+        BatchNorm(out_ch, relu)
+    )
+end
+
+struct SqueezeExcite
+    fc1::Dense
+    fc2::Dense
+end
+SqueezeExcite(ch::Int, r::Int=16) = SqueezeExcite(Dense(ch, div(ch,r), relu), Dense(div(ch,r), ch, σ))
+function (se::SqueezeExcite)(x)
+    s = mean(x, dims=(1,2))
+    s = reshape(s, (size(s,4),))
+    w = se.fc2(se.fc1(s))
+    w = reshape(w, (1,1,length(w),1))
+    return x .* w
+end
+
+function residual_block(ch::Int; stride::Int=1)
+    main = Chain(
+        conv_block(ch,ch; ks=3,stride=stride),
+        conv_block(ch,ch; ks=3,stride=1),
+        SqueezeExcite(ch)
+    )
+    return Chain(x -> main(x) .+ x, relu)
+end
+
+function invasive_resnet()
+    return Chain(
+        conv_block(3, 32; ks=7, stride=2),
+        MaxPool((3,3); stride=2, pad=1),
+        residual_block(32),
+        residual_block(32),
+        residual_block(64; stride=2),
+        residual_block(64),
+        residual_block(128; stride=2),
+        residual_block(128),
+        GlobalMeanPool(),
+        flatten,
+        Dense(128, NUM_CLASSES)
+    )
+end
+
+# =============================================================================
+# LOSSES
+# =============================================================================
+function label_smooth_loss(ŷ, y, num_classes::Int; ε=0.1f0)
+    y_sm = (1-ε) * onehotbatch(y, 1:num_classes) .+ ε/num_classes
+    return logitcrossentropy(ŷ, y_sm)
+end
+
+function focal_loss(ŷ, y; γ=2f0)
+    y_oh = onehotbatch(y, 1:NUM_CLASSES)
+    p = Flux.softmax(ŷ)
+    pt = sum(y_oh .* p, dims=1)
+    return -mean((1 .- pt).^γ .* log.(pt .+ 1e-9f0))
+end
+
+function weighted_smoothed_loss(ŷ, y; class_w=ones(Float32, NUM_CLASSES),
+        smooth=0.1f0, focal_gamma=2f0)
+    y_oh = onehotbatch(y, 1:NUM_CLASSES)
+    y_sm = (1-smooth) * y_oh .+ smooth/NUM_CLASSES
+    logp = Flux.logsoftmax(ŷ)
+    ce = -sum(y_sm .* logp, dims=1)
+    wce = mean(class_w[y] .* ce)
+    p = Flux.softmax(ŷ)
+    pt = sum(y_oh .* p, dims=1)
+    focal = -mean((1 .- pt).^focal_gamma .* log.(pt .+ 1e-9f0))
+    return 0.7f0*wce + 0.3f0*focal
+end
+
+# =============================================================================
+# TRAINING
+# =============================================================================
+function train_invasive_identifier(data_dir; epochs=50, batch_size=32, η=3e-4)
+    model = invasive_resnet()
+    opt = Flux.Optimise.AdamW(η)
+    class_w = ones(Float32, NUM_CLASSES)
+    label_smooth = 0.1f0
+    focal_gamma = 2f0
+    for epoch in 1:epochs
+        X = rand(Float32, 224,224,3,batch_size)
+        y = rand(1:NUM_CLASSES, batch_size)
+        loss_val, back = Zygote.pullback(m -> begin
+            z = m(X)
+            weighted_smoothed_loss(z, y; class_w=class_w,
+                smooth=label_smooth, focal_gamma=focal_gamma)
+        end, model)
+        grads = first(back(1f0))
+        Flux.Optimise.update!(opt, model, grads)
+        @info "Epoch $epoch | Loss: $loss_val"
+        if epoch % 10 == 0
+            save_model(model, "invasive_identifier_epoch_$epoch.bson")
+        end
+    end
+    save_model(model, "final_invasive_identifier.bson")
+    return model
+end
+
+# =============================================================================
+# SAVE/LOAD
+# =============================================================================
+function save_model(model, path::String)
+    BSON.@save path model
+end
+function load_model(path::String)
+    d = BSON.load(path)
+    return d[:model]
+end
+
+# =============================================================================
+# INFERENCE
+# =============================================================================
+const TEMP = Ref(1.0f0)
+
+function predict_species(model, img; region_code=nothing, topk=3)
+    X = permutedims(Float32.(img), (2,1,3))
+    X = reshape(X, size(X,1), size(X,2), size(X,3), 1)
+    z = model(X)
+    probs = Flux.softmax(z ./ TEMP[])
+    order = sortperm(probs, rev=true)
+    species = ALL_SPECIES[order[1:topk]]
+    scores = probs[order[1:topk]]
+    if region_code !== nothing && haskey(REGION_TAGS, region_code)
+        allowed = REGION_TAGS[region_code]
+        mask = map(s -> s in allowed, species)
+        return species[mask], scores[mask]
+    end
+    return species, scores
+end
+
+# =============================================================================
+# API SERVER
+# =============================================================================
+const CORS_HEADERS = [
+    "Access-Control-Allow-Origin" => "*",
+    "Access-Control-Allow-Methods" => "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers" => "*",
+]
+
+function api_router(model_loader_fn)
+    router = HTTP.Router()
+    model_ref = Ref{Any}(nothing)
+
+    HTTP.@register(router, "POST", "/infer") do req::HTTP.Request
+        if HTTP.method(req) == "OPTIONS"
+            return HTTP.Response(200, CORS_HEADERS)
+        end
+        if model_ref[] === nothing
+            model_ref[] = model_loader_fn()
+        end
+        body = JSON3.read(String(req.body))
+        img_path = body["image_path"]
+        region_code = haskey(body, "region_code") ? body["region_code"] : nothing
+        img = load(img_path) # ensure FileIO/Images available
+        preds, scores = predict_species(model_ref[], img; region_code=region_code)
+        return HTTP.Response(200, JSON3.write(Dict("species"=>preds, "scores"=>scores)),
+                             vcat(CORS_HEADERS, ["Content-Type" => "application/json"]))
+    end
+
+    HTTP.@register(router, "POST", "/report") do req::HTTP.Request
+        if HTTP.method(req) == "OPTIONS"
+            return HTTP.Response(200, CORS_HEADERS)
+        end
+        body = JSON3.read(String(req.body))
+        return HTTP.Response(200, JSON3.write(Dict("status"=>"received")),
+                             vcat(CORS_HEADERS, ["Content-Type" => "application/json"]))
+    end
+
+    # optional generic OPTIONS handler
+    HTTP.@register(router, "OPTIONS", "/infer") do req; HTTP.Response(200, CORS_HEADERS) end
+    HTTP.@register(router, "OPTIONS", "/report") do req; HTTP.Response(200, CORS_HEADERS) end
+
+    return router
+end
+
+function start_api_server(model_path::String)
+    host = get(ENV, "HOST", "0.0.0.0")
+    port = parse(Int, get(ENV, "PORT", "8080"))
+    model_loader_fn = () -> load_model(model_path)
+    router = api_router(model_loader_fn)
+    println("🚀 API server running on http://$host:$port")
+    HTTP.serve(router, host, port; verbose=false, stream=false)
+end
+
